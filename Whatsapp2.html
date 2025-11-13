@@ -1,0 +1,142 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Text → Excel (fixed)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body { font-family: system-ui, Arial; max-width:900px; margin:20px auto; padding:14px; }
+    input, button { font-size:15px; padding:8px; }
+    #status { margin-top:12px; color:#111; }
+    pre { background:#f6f6f6; padding:10px; white-space:pre-wrap; }
+  </style>
+
+  <!-- SheetJS CDN (works in-browser) -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.19.2/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+  <h2>Text block → Excel (Fixed)</h2>
+  <p>Select your <code>.txt</code> file and click <b>Parse & Download</b>. Uses in-browser parsing and saves an .xlsx file.</p>
+
+  <input id="fileInput" type="file" accept=".txt,text/plain"/>&nbsp;
+  <button id="runBtn">Parse & Download XLSX</button>
+  <div id="status"></div>
+  <div id="preview"></div>
+
+<script>
+const statusEl = document.getElementById('status');
+const previewEl = document.getElementById('preview');
+
+document.getElementById('runBtn').addEventListener('click', () => {
+  previewEl.innerHTML = '';
+  const f = document.getElementById('fileInput').files[0];
+  if (!f) { statusEl.textContent = 'Please choose a .txt file first.'; return; }
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const result = parseAndExport(reader.result);
+      statusEl.textContent = result;
+    } catch (err) {
+      console.error(err);
+      statusEl.textContent = 'Error: ' + err.message;
+    }
+  };
+  reader.onerror = (e) => statusEl.textContent = 'File read error: ' + e;
+  reader.readAsText(f, 'utf-8');
+});
+
+function parseAndExport(text) {
+  statusEl.textContent = 'Parsing file...';
+  text = text.replace(/\r\n/g,'\n').replace(/\r/g,'\n');
+  const headerRegex = /^\s*\d{1,2}\/\d{1,2}\/(?:\d{2}|\d{4}),\s*\d{1,2}:\d{2}.*$/m;
+  const lines = text.split('\n');
+
+  const blocks = [];
+  let i = 0;
+  while (i < lines.length) {
+    while (i < lines.length && !headerRegex.test(lines[i])) i++;
+    if (i >= lines.length) break;
+    const headerLine = lines[i].trim();
+    i++;
+    const cur = { Heading: headerLine };
+    while (i < lines.length && !headerRegex.test(lines[i])) {
+      const ln = lines[i].trim();
+      if (ln) {
+        const m = ln.match(/^\*?\s*([^:*]{1,120}?)\*?\s*:\s*(.*)$/);
+        if (m) {
+          const key = m[1].trim();
+          const val = m[2].trim();
+          if (cur[key]) cur[key] = cur[key] + ' | ' + val;
+          else cur[key] = val;
+        } else {
+          if (!cur._Notes) cur._Notes = ln;
+          else cur._Notes += ' ' + ln;
+        }
+      }
+      i++;
+    }
+    blocks.push(cur);
+  }
+
+  if (blocks.length === 0) {
+    statusEl.textContent = 'No blocks found using the default header pattern. If your header differs, try adjusting the code.';
+    return 'No blocks found';
+  }
+
+  // union of columns
+  const colsSet = new Set();
+  blocks.forEach(b => Object.keys(b).forEach(k => colsSet.add(k)));
+  // prefer Heading first and _Notes last
+  const allCols = Array.from(colsSet).sort((a,b) => {
+    if (a==='Heading') return -1;
+    if (b==='Heading') return 1;
+    if (a==='_Notes') return 1;
+    if (b==='_Notes') return -1;
+    return a.localeCompare(b);
+  });
+
+  const wsData = [ allCols ];
+  blocks.forEach(b => {
+    const row = allCols.map(c => b[c] || '');
+    wsData.push(row);
+  });
+
+  // Create workbook and sheet
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+  ws['!cols'] = allCols.map(c => ({ wch: Math.min(50, Math.max(10, c.length + 8)) }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Parsed');
+
+  const fname = 'parsed_blocks.xlsx';
+
+  // Use writeFile which triggers a download more reliably across environments
+  try {
+    XLSX.writeFile(wb, fname);
+    // preview first block
+    previewEl.innerHTML = '<h4>Preview (first block)</h4><pre>' + JSON.stringify(blocks[0], null, 2) + '</pre>';
+    return `Parsed ${blocks.length} block(s). "${fname}" should have downloaded.`;
+  } catch (ex) {
+    console.warn('XLSX.writeFile failed, falling back to CSV. Error:', ex);
+    // fallback: try CSV
+    try {
+      const csv = XLSX.utils.sheet_to_csv(ws);
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'parsed_blocks.csv';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      previewEl.innerHTML = '<h4>Preview (first block)</h4><pre>' + JSON.stringify(blocks[0], null, 2) + '</pre>';
+      return 'XLSX download failed; saved CSV instead.';
+    } catch (e2) {
+      console.error(e2);
+      throw new Error('Both XLSX and CSV downloads failed. Check console for details.');
+    }
+  }
+}
+</script>
+</body>
+</html>

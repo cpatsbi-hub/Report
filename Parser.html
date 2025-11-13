@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Text → Excel Parser</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+
+<!-- Correct SheetJS library (XLSX will be defined) -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.19.3/dist/xlsx.full.min.js"></script>
+
+<style>
+body { font-family: Arial; padding:20px; max-width:800px; margin:auto; }
+input, button { font-size:16px; padding:8px; margin:6px 0; }
+pre { background:#f2f2f2; padding:10px; }
+</style>
+</head>
+<body>
+
+<h2>Text File → Excel Converter</h2>
+<input type="file" id="fileInput" accept=".txt">
+<button onclick="processFile()">Parse & Download Excel</button>
+
+<div id="msg"></div>
+
+<script>
+function processFile() {
+    const file = document.getElementById("fileInput").files[0];
+    if (!file) {
+        document.getElementById("msg").innerText = "Please select a .txt file.";
+        return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => parseText(reader.result);
+    reader.readAsText(file);
+}
+
+function parseText(text) {
+    document.getElementById("msg").innerText = "Parsing...";
+
+    const lines = text.replace(/\r/g, "").split("\n");
+
+    const headerRegex = /^\d{1,2}\/\d{1,2}\/(?:\d{2}|\d{4}),\s*\d{1,2}:\d{2}/;
+    let blocks = [];
+    let current = null;
+
+    for (let line of lines) {
+        line = line.trim();
+
+        if (headerRegex.test(line)) {
+            if (current) blocks.push(current);
+            current = { Heading: line };
+            continue;
+        }
+
+        if (!current || line === "") continue;
+
+        let m = line.match(/^\*?([^:*]+)\*?\s*:\s*(.*)$/);
+        if (m) {
+            let key = m[1].trim();
+            let val = m[2].trim();
+            current[key] = val;
+        }
+    }
+    if (current) blocks.push(current);
+
+    if (blocks.length === 0) {
+        document.getElementById("msg").innerText = "No valid blocks found.";
+        return;
+    }
+
+    // Build Excel columns
+    let cols = new Set();
+    blocks.forEach(b => Object.keys(b).forEach(k => cols.add(k)));
+    cols = Array.from(cols);
+
+    let sheetData = [cols];
+    blocks.forEach(b => {
+        sheetData.push(cols.map(c => b[c] || ""));
+    });
+
+    // Create Excel
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet(sheetData);
+    XLSX.utils.book_append_sheet(wb, ws, "Data");
+
+    XLSX.writeFile(wb, "parsed_data.xlsx");
+
+    document.getElementById("msg").innerText = 
+        "Done! Excel downloaded. Parsed " + blocks.length + " block(s).";
+}
+</script>
+
+</body>
+</html>
